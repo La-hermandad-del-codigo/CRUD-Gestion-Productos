@@ -31,7 +31,8 @@ function validate(values) {
     return errors;
 }
 
-export default function ProductForm({ product, onSave, onCancel, loading }) {
+export default function ProductForm({ product, onSave, onCancel, loading, categories: categoriesProp }) {
+    const categoryList = categoriesProp?.length ? categoriesProp : CATEGORIES;
     const [form, setForm] = useState(EMPTY_FORM);
     const [errors, setErrors] = useState({});
     const [touched, setTouched] = useState({});
@@ -194,7 +195,7 @@ export default function ProductForm({ product, onSave, onCancel, loading }) {
                                 className="select"
                                 disabled={loading}
                             >
-                                {CATEGORIES.map((c) => (
+                                {categoryList.map((c) => (
                                     <option key={c} value={c}>{c}</option>
                                 ))}
                             </select>

@@ -6,6 +6,7 @@
  */
 
 const STORAGE_KEY = 'crud_productos';
+const CATEGORIES_KEY = 'crud_categorias';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,75 @@ export async function deleteProduct(id) {
 
         writeToStorage(filtered);
         return id;
+    });
+}
+
+const DEFAULT_CATEGORIES = [
+    'Electrónica',
+    'Ropa',
+    'Alimentos',
+    'Hogar',
+    'Deportes',
+    'Juguetes',
+    'Libros',
+    'Otros',
+];
+
+/**
+ * Retrieves available product categories from localStorage.
+ * Seeds defaults if none are stored yet.
+ * @returns {Promise<string[]>}
+ */
+export async function getCategories() {
+    return withSimulation(() => {
+        try {
+            const raw = localStorage.getItem(CATEGORIES_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            }
+            // Seed defaults on first run
+            localStorage.setItem(CATEGORIES_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+            return DEFAULT_CATEGORIES;
+        } catch {
+            return DEFAULT_CATEGORIES;
+        }
+    });
+}
+
+/**
+ * Validates product data integrity:
+ * checks that no product has precio < 0 or stock < 0.
+ * @returns {Promise<Array<{ id: string, nombre: string, field: string, value: number }>>}
+ *   Resolves with an array of validation-error descriptors (empty = all clean).
+ */
+export async function validateProducts() {
+    return withSimulation(() => {
+        const products = readFromStorage();
+        const errors = [];
+
+        for (const p of products) {
+            if (typeof p.precio === 'number' && p.precio < 0) {
+                errors.push({
+                    id: p.id,
+                    nombre: p.nombre,
+                    field: 'precio',
+                    value: p.precio,
+                    message: `Producto "${p.nombre}" tiene precio negativo (${p.precio}).`,
+                });
+            }
+            if (typeof p.stock === 'number' && p.stock < 0) {
+                errors.push({
+                    id: p.id,
+                    nombre: p.nombre,
+                    field: 'stock',
+                    value: p.stock,
+                    message: `Producto "${p.nombre}" tiene stock negativo (${p.stock}).`,
+                });
+            }
+        }
+
+        return errors;
     });
 }
 

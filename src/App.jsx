@@ -13,13 +13,16 @@ import Toast from './components/Toast';
 export default function App() {
   const {
     products,
+    categories,
+    validationErrors,
     loading,
     error,
+    taskStatuses,
+    refreshProducts,
     createProduct,
     editProduct,
     removeProduct,
     clearError,
-    fetchProducts,
   } = useProducts();
 
   // ── View state ─────────────────────────────────────────────────────────────
@@ -100,7 +103,7 @@ export default function App() {
             <button
               id="btn-refresh"
               className="btn btn--ghost btn--sm"
-              onClick={fetchProducts}
+              onClick={refreshProducts}
               disabled={loading}
               aria-label="Refrescar productos"
             >
@@ -109,6 +112,32 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Parallel task status bar */}
+      <div className="task-status-bar" aria-label="Estado de tareas paralelas">
+        {(['products', 'categories', 'validation']).map((task) => {
+          const labels = { products: 'Productos', categories: 'Categorías', validation: 'Validación' };
+          const icons = { idle: '⏸', loading: '⏳', success: '✅', error: '❌' };
+          const status = taskStatuses[task];
+          return (
+            <span key={task} className={`task-pill task-pill--${status}`}>
+              {icons[status]} {labels[task]}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Validation warnings */}
+      {validationErrors.length > 0 && (
+        <div className="validation-banner" role="alert">
+          <strong>⚠️ {validationErrors.length} problema(s) de integridad detectado(s):</strong>
+          <ul className="validation-banner__list">
+            {validationErrors.map((e) => (
+              <li key={`${e.id}-${e.field}`}>{e.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Main content */}
       <main className="main">
@@ -130,6 +159,7 @@ export default function App() {
           onSave={handleSave}
           onCancel={closeForm}
           loading={loading}
+          categories={categories}
         />
       )}
 
