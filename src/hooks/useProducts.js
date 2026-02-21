@@ -1,19 +1,52 @@
 /**
  * useProducts.js
- * Custom hook that bridges the UI and storageService.
  *
- * Bootstrap parallel (Promise.allSettled):
- *   1. Load product list         → products state
- *   2. Load available categories → categories state
- *   3. Validate data integrity   → validationErrors state
+ * Hook personalizado que conecta la UI con storageService.
  *
- * CRUD operations:
- *   createProduct  — validate → run in parallel (save product + update categories if new)
- *                    → rollback categories if product save fails but categories updated
- *   editProduct    — optimistic update (local state immediately), then confirm in storage
- *                    → revert to previous value if storage fails
- *   removeProduct  — soft delete: sets estado = 'inactivo' (optimistic, no revert needed)
- *   hardDeleteProduct — physical removal ONLY if product is already 'inactivo'
+ * CONCEPTOS DEMOSTRADOS:
+ * ─────────────────────
+ * 1. Promise.allSettled  — Permite ejecutar tareas INDEPENDIENTES en paralelo
+ *                          sin que el fallo de una cancele las demás.
+ *                          Usado en: refreshProducts (carga inicial) y createProduct.
+ *
+ * 2. async/await         — Toda la lógica asíncrona usa async/await en lugar de
+ *                          .then()/.catch() anidados, para mayor legibilidad y
+ *                          trazabilidad de errores.
+ *
+ * 3. Optimistic update   — editProduct y removeProduct actualizan el estado local
+ *                          ANTES de confirmar en storage para respuesta instantánea.
+ *                          Si storage falla → rollback al valor anterior.
+ *
+ * 4. Manejo centralizado — withLoading encapsula setLoading + setError para que
+ *    de errores             cada operación CRUD no repita la misma lógica de UI.
+ *                          Los errores se RE-LANZAN para que el llamador pueda hacer
+ *                          rollback antes de que el error llegue a la UI.
+ *
+ * ─── Flujo de carga inicial ───────────────────────────────────────────────────
+ *
+ *   useEffect → refreshProducts()
+ *                    │
+ *                    ▼
+ *        Promise.allSettled (paralelo)
+ *        ┌──────────────────────────┐
+ *        │  getProducts()           │  → products state
+ *        │  getCategories()         │  → categories state
+ *        │  validateProducts()      │  → validationErrors state
+ *        └──────────────────────────┘
+ *                    │
+ *                    ▼
+ *        Un solo setState cuando TODAS completan
+ *        (setProducts, setCategories, setValidationErrors, setTaskStatuses, setLoading)
+ *
+ * ─── Por qué Promise.allSettled y no Promise.all ─────────────────────────────
+ *
+ *   Promise.all → rechaza completo si UNA SOLA promesa falla.
+ *                 Inaceptable aquí: si la validación falla no queremos
+ *                 perder los productos o categorías ya cargados.
+ *
+ *   Promise.allSettled → espera a TODAS y devuelve { status, value | reason }
+ *                        por cada tarea. Podemos integrar resultados parciales
+ *                        y mostrar errores por tarea en el TaskStatusBar.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -29,7 +62,9 @@ import {
     validateProducts,
 } from '../services/storageService';
 
-// ── Initial state helpers ──────────────────────────────────────────────────────
+// ── Estado inicial de las tareas paralelas ────────────────────────────────────
+// Cada clave corresponde a una de las tres tareas de refreshProducts.
+// Valores posibles: 'idle' | 'loading' | 'success' | 'error'
 
 const INITIAL_TASK_STATUSES = {
     products: 'idle',
@@ -37,13 +72,13 @@ const INITIAL_TASK_STATUSES = {
     validation: 'idle',
 };
 
-// ── Validation helper (mirrors form validate, used pre-save) ──────────────────
+// ── Helper de validación de payload ──────────────────────────────────────────
+// Se valida ANTES de cualquier I/O para evitar round-trips innecesarios.
 
 /**
- * Validates product payload before sending to storage.
- * Returns null if valid, or an error message string if invalid.
+ * Valida el payload de producto antes de enviarlo a storage.
  * @param {{ nombre: string, precio: number, stock: number }} data
- * @returns {string | null}
+ * @returns {string | null} Mensaje de error, o null si es válido.
  */
 function validatePayload(data) {
     if (!data.nombre || !data.nombre.trim()) return 'El nombre es obligatorio.';
@@ -84,7 +119,7 @@ export function useProducts() {
     const [error, setError] = useState(null);
     const [taskStatuses, setTaskStatuses] = useState(INITIAL_TASK_STATUSES);
 
-    // Prevent state updates after unmount
+    // mountedRef previene actualizaciones de estado post-desmontaje (memory leak)
     const mountedRef = useRef(true);
     useEffect(() => {
         mountedRef.current = true;
@@ -95,52 +130,92 @@ export function useProducts() {
 
     const clearError = useCallback(() => setError(null), []);
 
-    /** Re-runs validation in the background and quietly updates state. */
+    /**
+     * Re-ejecuta validateProducts en segundo plano y actualiza el estado.
+     * Se llama después de cada operación CRUD exitosa para mantener el banner
+     * de errores de integridad actualizado sin bloquear la UI.
+     */
     const revalidate = useCallback(() => {
         validateProducts()
             .then((errs) => { if (mountedRef.current) setValidationErrors(errs); })
-            .catch(() => { /* validation errors are non-critical */ });
+            .catch(() => { /* Los errores de validación son no-críticos: se ignoran silenciosamente */ });
     }, []);
 
     /**
-     * Wraps a single-operation CRUD call with loading flag + error capture.
-     * Rethrows errors so callers can react (e.g. rollback).
+     * Wrapper para operaciones CRUD individuales.
+     *
+     * Por qué async/await aquí:
+     *   Permite escribir `return await asyncFn()` y capturar excepciones con
+     *   try/catch en lugar de manejar un callback de error separado.
+     *
+     * Por qué re-lanzar el error:
+     *   El error se captura aquí para setError (UI), pero se RELANZA para que
+     *   el llamador (e.g. editProduct) pueda ejecutar su lógica de rollback
+     *   ANTES de que el error llegue a la UI. Si no relanzáramos, el rollback
+     *   nunca ejecutaría porque el catch del llamador no recibiría el error.
      */
     const withLoading = useCallback(async (asyncFn) => {
         setLoading(true);
         setError(null);
         try {
+            // async/await: suspende hasta que asyncFn() resuelva o rechace
             return await asyncFn();
         } catch (err) {
             const message = err?.message ?? 'Ocurrió un error inesperado.';
             if (mountedRef.current) setError(message);
-            throw err; // re-throw so callers can rollback
+            throw err; // ← re-throw para permitir rollback en el llamador
         } finally {
+            // finally garantiza que setLoading(false) se ejecute SIEMPRE,
+            // incluso si asyncFn() lanzó una excepción no capturada.
             if (mountedRef.current) setLoading(false);
         }
     }, []);
 
-    // ── Parallel bootstrap ────────────────────────────────────────────────────────
+    // ── Carga paralela inicial ────────────────────────────────────────────────────
 
     /**
-     * Executes the three independent tasks in parallel using Promise.allSettled.
-     * A failure in one task never blocks the others.
+     * ★ NÚCLEO DEL PARALELISMO ★
+     *
+     * Ejecuta THREE tareas INDEPENDIENTES en paralelo con Promise.allSettled:
+     *   1. getProducts()     – lista de productos
+     *   2. getCategories()   – categorías disponibles
+     *   3. validateProducts() – errores de integridad
+     *
+     * Por qué Promise.allSettled y NO Promise.all:
+     *   • Promise.all rechaza completo si UNA promesa falla.
+     *   • Promise.allSettled espera a TODAS y devuelve el resultado
+     *     individual de cada una (fulfilled | rejected).
+     *   • Esto permite mostrar los datos que SÍ llegaron aunque otra
+     *     tarea haya fallado (e.g., si validación falla, los productos
+     *     y categorías siguen siendo visibles en la UI).
+     *
+     * Un solo bloque de setState:
+     *   Toda la integración de resultados ocurre DESPUÉS de que
+     *   Promise.allSettled resuelve, por lo que React agrupa los
+     *   múltiples setX en un solo re-render (batching en React 18).
      */
     const refreshProducts = useCallback(async () => {
         if (!mountedRef.current) return;
 
         setLoading(true);
         setError(null);
+        // Marca las tres tareas como 'loading' simultáneamente
         setTaskStatuses({ products: 'loading', categories: 'loading', validation: 'loading' });
 
+        // ↓ Las tres promesas se INICIAN en paralelo (no hay await entre ellas)
         const [productsResult, categoriesResult, validationResult] =
             await Promise.allSettled([
-                getProducts(),
-                getCategories(),
-                validateProducts(),
+                getProducts(),      // tarea 1: independiente
+                getCategories(),    // tarea 2: independiente
+                validateProducts(), // tarea 3: independiente
             ]);
+        // ↑ await aquí: esperamos a que TODAS completen antes de continuar
 
         if (!mountedRef.current) return;
+
+        // ── Integración de resultados ────────────────────────────────────────────
+        // Se procesan los tres resultados UNA VEZ que Promise.allSettled resolvió.
+        // Cada resultado tiene .status === 'fulfilled' | 'rejected'.
 
         const newStatuses = { ...INITIAL_TASK_STATUSES };
         const failedTasks = [];
@@ -169,9 +244,11 @@ export function useProducts() {
             failedTasks.push(`Validación: ${validationResult.reason?.message ?? 'error desconocido'}`);
         }
 
+        // Un único setState agrupa todos los cambios de estado (React 18 batching)
         setTaskStatuses(newStatuses);
 
         if (failedTasks.length > 0) {
+            // Muestra el error consolidado solo si hay fallos; el flujo NO se rompe
             setError(
                 `${failedTasks.length} tarea(s) fallaron:\n• ${failedTasks.join('\n• ')}`
             );
@@ -180,21 +257,32 @@ export function useProducts() {
         setLoading(false);
     }, []);
 
-    // ── CREATE ────────────────────────────────────────────────────────────────────
+    // ── CREAR producto ────────────────────────────────────────────────────────────
 
     /**
-     * Creates a new product.
-     * Steps:
-     *   0. Validate payload — throws and surfaces error if invalid.
-     *   1. Determine if the category is new (not yet in state).
-     *   2. Run in PARALLEL: (a) addProduct to storage, (b) saveCategories if new category.
-     *   3. ROLLBACK: if (a) fails but (b) succeeded, revert categories to previous list.
-     *   4. On success, update local products + categories state.
+     * Crea un producto nuevo.
+     *
+     * Usa async/await internamente dentro de withLoading para:
+     *   1. Validar el payload ANTES de cualquier I/O.
+     *   2. Ejecutar addProduct + saveCategories en PARALELO con Promise.allSettled.
+     *   3. Hacer ROLLBACK de categorías si el producto falló pero las categorías
+     *      ya se habían guardado (para mantener consistencia entre los dos almacenes).
+     *
+     * ★ Por qué Promise.allSettled aquí y no Promise.all:
+     *   Necesitamos el resultado INDIVIDUAL de cada promesa para saber si ejecutar
+     *   rollback. Con Promise.all perderíamos la información de cuál tuvo éxito y
+     *   cuál no cuando hay rechazo parcial.
+     *
+     * Estrategia de rollback:
+     *   Si (a) addProduct falló Y (b) saveCategories tuvo éxito →
+     *   la nueva categoría quedó guardada pero el producto no existe.
+     *   → Revertimos localStorage.crud_categorias a la lista previa.
+     *   → Lanzamos el error original del producto hacia la UI.
      */
     const createProduct = useCallback(
         (productData) =>
             withLoading(async () => {
-                // Step 0: validate before any I/O
+                // Paso 0: validación pre-I/O (falla barato sin tocar storage)
                 const validationError = validatePayload(productData);
                 if (validationError) throw new Error(validationError);
 
@@ -208,79 +296,92 @@ export function useProducts() {
                 let productSaved = false;
                 let categoriesSaved = false;
 
-                // Step 2: run in parallel
+                // Paso 2: lanzar ambas operaciones EN PARALELO
+                // ↓ Las dos promesas arrancan simultáneamente
                 const [productResult, categoriesResult] = await Promise.allSettled([
-                    addProduct(productData),                                          // (a)
-                    isNewCategory ? saveCategories(nextCategories) : Promise.resolve(prevCategories), // (b)
+                    addProduct(productData),                                           // (a) guardar producto
+                    isNewCategory ? saveCategories(nextCategories) : Promise.resolve(prevCategories), // (b) guardar categoría nueva
                 ]);
+                // ↑ await: esperamos las dos antes de decidir qué hacer
 
                 productSaved = productResult.status === 'fulfilled';
                 categoriesSaved = isNewCategory && categoriesResult.status === 'fulfilled';
 
-                // Step 3: rollback if product failed but categories updated
+                // Paso 3: ROLLBACK si el producto falló pero categorías sí se guardaron
                 if (!productSaved && categoriesSaved) {
                     try {
-                        // Revert to previous category list (best-effort, don't surface this error)
+                        // Revertir lista de categorías en localStorage (best-effort)
                         localStorage.setItem('crud_categorias', JSON.stringify(prevCategories));
                     } catch {
-                        // Storage rollback failed — log silently, UI stays consistent
+                        // Si el rollback falla también, no hay mucho más que hacer.
+                        // El error no se propaga para no ocultar el error original.
                     }
-                    // Surface the original product error
+                    // Propagar el error del producto hacia withLoading → setError → Toast
                     throw productResult.reason;
                 }
 
-                // If product succeeded, commit state
+                // Paso 4: si el producto se guardó, actualizar estado local
                 if (productSaved) {
                     const created = productResult.value;
                     if (mountedRef.current) {
                         setProducts((prev) => [...prev, created]);
                         if (categoriesSaved) {
-                            // Update categories in sync with what was persisted
                             setCategories(
                                 categoriesResult.status === 'fulfilled'
                                     ? categoriesResult.value
                                     : nextCategories
                             );
                         }
-                        revalidate();
+                        revalidate(); // re-chequeo de integridad en background
                     }
                     return created;
                 }
 
-                // Both failed (unlikely but handle gracefully)
+                // Ambas fallaron (caso raro pero posible)
                 throw productResult.reason ?? new Error('Error al crear el producto.');
             }),
         [withLoading, categories, revalidate]
     );
 
-    // ── UPDATE (optimistic) ───────────────────────────────────────────────────────
+    // ── EDITAR producto (optimistic update + rollback) ─────────────────────────
 
     /**
-     * Updates a product with optimistic UI update.
-     * Steps:
-     *   1. Capture the previous product state (for rollback).
-     *   2. Apply update to local state IMMEDIATELY.
-     *   3. Confirm in storage.
-     *   4. If storage fails → revert local state and surface error.
+     * ★ OPTIMISTIC UPDATE ★
+     *
+     * Patrón:
+     *   1. Capturar snapshot del producto ANTES del update (para poder revertir).
+     *   2. Aplicar el update en el estado local INMEDIATAMENTE (la UI responde al
+     *      instante sin esperar a storage).
+     *   3. Confirmar el update en storage con await.
+     *   4. Si storage falla → ROLLBACK: restaurar el snapshot capturado en (1).
+     *
+     * Por qué optimistic y no esperar storage:
+     *   La latencia simulada (200–500 ms) crearía una delicadeza perceptible
+     *   en la UI. El optimistic update hace que el cambio sea instantáneo;
+     *   el rollback solo ocurre si hay un error real.
+     *
+     * Por qué el rollback funciona:
+     *   El closure de setProducts captura `previousProduct` al momento del update.
+     *   Si el await storageOp lanza, el catch restaura ese valor guardado.
      */
     const editProduct = useCallback(
         (id, updates) =>
             withLoading(async () => {
-                // Step 1: snapshot before update
+                // Paso 1: capturar snapshot previo usando el updater de setState
+                // (acceso al estado actual sin necesitar la variable del closure)
                 let previousProduct = null;
                 setProducts((prev) => {
                     const found = prev.find((p) => p.id === id);
                     if (found) previousProduct = found;
-                    return prev;
+                    return prev; // no modificamos el estado aún
                 });
 
                 if (!previousProduct) {
                     throw new Error(`Producto con id "${id}" no encontrado localmente.`);
                 }
 
+                // Paso 2: construir el valor optimista y aplicarlo en la UI YA
                 const optimisticProduct = { ...previousProduct, ...updates };
-
-                // Step 2: apply optimistic update immediately
                 if (mountedRef.current) {
                     setProducts((prev) =>
                         prev.map((p) => (p.id === id ? optimisticProduct : p))
@@ -288,10 +389,10 @@ export function useProducts() {
                 }
 
                 try {
-                    // Step 3: confirm in storage
+                    // Paso 3: async/await — pausa hasta que storage confirme
                     const confirmed = await updateProduct(id, updates);
                     if (mountedRef.current) {
-                        // Replace optimistic with confirmed server value
+                        // Reemplazar el valor optimista con el confirmado por storage
                         setProducts((prev) =>
                             prev.map((p) => (p.id === id ? confirmed : p))
                         );
@@ -299,13 +400,13 @@ export function useProducts() {
                     }
                     return confirmed;
                 } catch (err) {
-                    // Step 4: revert on failure
+                    // Paso 4: ROLLBACK — restaurar el snapshot previo
                     if (mountedRef.current) {
                         setProducts((prev) =>
                             prev.map((p) => (p.id === id ? previousProduct : p))
                         );
                     }
-                    throw err; // withLoading will set error state
+                    throw err; // withLoading captura esto y lo muestra como error
                 }
             }),
         [withLoading, revalidate]
@@ -314,9 +415,16 @@ export function useProducts() {
     // ── SOFT DELETE ───────────────────────────────────────────────────────────────
 
     /**
-     * Soft deletes a product by setting its estado to 'inactivo'.
-     * Uses optimistic update: mark locally first, then confirm in storage.
-     * If storage fails, revert the product to 'activo'.
+     * Soft delete: marca estado = 'inactivo' (NO elimina físicamente).
+     *
+     * También usa optimistic update + rollback:
+     *   - Marca inactivo en UI inmediatamente.
+     *   - Si storage rechaza, revierte a 'activo' automáticamente.
+     *
+     * Por qué soft delete y no hard delete directo:
+     *   Permite una "papelera de reciclaje" — el dato sigue en localStorage
+     *   y puede auditarse o restaurarse. El hard delete es un segundo paso
+     *   explícito que el usuario debe elegir.
      */
     const removeProduct = useCallback(
         (id) =>
@@ -336,7 +444,7 @@ export function useProducts() {
                     throw new Error('El producto ya está inactivo.');
                 }
 
-                // Optimistic: mark as inactivo immediately
+                // Optimistic: marcar inactivo en UI antes de confirmar
                 if (mountedRef.current) {
                     setProducts((prev) =>
                         prev.map((p) =>
@@ -346,6 +454,7 @@ export function useProducts() {
                 }
 
                 try {
+                    // async/await: confirmar en storage
                     const confirmed = await updateProduct(id, { estado: 'inactivo' });
                     if (mountedRef.current) {
                         setProducts((prev) =>
@@ -355,7 +464,7 @@ export function useProducts() {
                     }
                     return id;
                 } catch (err) {
-                    // Revert soft delete
+                    // Rollback: revertir a 'activo' si storage falla
                     if (mountedRef.current) {
                         setProducts((prev) =>
                             prev.map((p) =>
@@ -372,9 +481,17 @@ export function useProducts() {
     // ── HARD DELETE ───────────────────────────────────────────────────────────────
 
     /**
-     * Permanently removes a product from storage.
-     * Only allowed if the product's estado is already 'inactivo'.
-     * Does NOT use optimistic update — removal is destructive and irreversible.
+     * Elimina un producto FÍSICAMENTE de localStorage.
+     *
+     * Por qué NO usa optimistic update:
+     *   La eliminación es IRREVERSIBLE. Si elimináramos el producto de la UI
+     *   antes de que storage confirmara y storage fallara, deberíamos reinsertarlo
+     *   manteniendo su posición en la lista — frágil y propenso a bugs.
+     *   Es más seguro confirmar con await y luego quitar de la UI.
+     *
+     * Por qué solo para productos 'inactivo':
+     *   El soft delete previo garantiza que el usuario revisó y desactivó el
+     *   producto conscientemente. El hard delete es un segundo paso deliberado.
      */
     const hardDeleteProduct = useCallback(
         (id) =>
@@ -388,6 +505,7 @@ export function useProducts() {
                     );
                 }
 
+                // async/await: esperar confirmación de storage ANTES de actualizar UI
                 await storageHardDelete(id);
 
                 if (mountedRef.current) {
@@ -399,22 +517,25 @@ export function useProducts() {
         [withLoading, products, revalidate]
     );
 
-    // ── Initial parallel load on mount ───────────────────────────────────────────
+    // ── Carga inicial al montar el componente ─────────────────────────────────────
 
     useEffect(() => {
+        // Se ejecuta una sola vez al montar (array de dependencias vacío).
+        // refreshProducts lanza las tres tareas en paralelo con Promise.allSettled.
         refreshProducts();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     return {
-        // State
+        // Estado de datos
         products,
         categories,
         validationErrors,
+        // Estado de UI
         loading,
         error,
         taskStatuses,
-        // Actions
+        // Acciones
         refreshProducts,
         createProduct,
         editProduct,
