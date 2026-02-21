@@ -23,6 +23,7 @@ export default function ProductList({
     onSoftDelete,
     onHardDelete,
     onAdd,
+    optimisticId = null,
 }) {
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('Todos');
@@ -202,6 +203,7 @@ export default function ProductList({
                             onHardDelete={handleHardDelete}
                             isSoftDeleting={softDeletingId === product.id}
                             isHardDeleting={hardDeletingId === product.id}
+                            isOptimistic={optimisticId === product.id}
                         />
                     ))}
                 </div>

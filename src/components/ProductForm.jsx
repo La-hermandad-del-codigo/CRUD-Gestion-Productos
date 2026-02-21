@@ -1,6 +1,12 @@
 /**
  * ProductForm.jsx
  * Add / Edit product form with full validation.
+ *
+ * Features:
+ * - Real-time per-field validation with ✅/❌ indicators once a field is touched
+ * - Submit button disabled with spinner while loading
+ * - "Enviando…" progress bar at the bottom of the form when loading
+ * - Categories loaded dynamically from hook state
  */
 
 import { useState, useEffect } from 'react';
@@ -29,6 +35,19 @@ function validate(values) {
     else if (isNaN(stock) || stock < 0) errors.stock = 'Debe ser un entero ≥ 0.';
 
     return errors;
+}
+
+/** Returns ✅, ❌, or null depending on field's touched/error state */
+function FieldStatusIcon({ name, touched, errors }) {
+    if (!touched[name]) return null;
+    return (
+        <span
+            className={`field-status-icon ${errors[name] ? 'field-status-icon--error' : 'field-status-icon--valid'}`}
+            aria-hidden="true"
+        >
+            {errors[name] ? '❌' : '✅'}
+        </span>
+    );
 }
 
 export default function ProductForm({ product, onSave, onCancel, loading, categories: categoriesProp }) {
@@ -101,6 +120,11 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
             <span className="field-error" role="alert">{errors[name]}</span>
         ) : null;
 
+    // Is the whole form currently clean (no validation errors after at least one touch)?
+    const anyTouched = Object.values(touched).some(Boolean);
+    const hasErrors = Object.keys(errors).some((k) => errors[k]);
+    const formIsClean = anyTouched && !hasErrors;
+
     return (
         <div className="form-overlay" role="dialog" aria-modal="true" aria-labelledby="form-title">
             <div className="form-panel">
@@ -119,11 +143,19 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                     </button>
                 </div>
 
+                {/* Loading progress bar */}
+                {loading && (
+                    <div className="form-progress" role="progressbar" aria-label="Guardando producto">
+                        <div className="form-progress__bar" />
+                    </div>
+                )}
+
                 <form id="product-form" onSubmit={handleSubmit} noValidate className="form">
                     {/* Nombre */}
                     <div className="form-group">
                         <label htmlFor="field-nombre" className="form-label">
                             Nombre <span className="required">*</span>
+                            <FieldStatusIcon name="nombre" touched={touched} errors={errors} />
                         </label>
                         <input
                             type="text"
@@ -132,7 +164,11 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                             value={form.nombre}
                             onChange={handleChange}
                             onBlur={handleBlur}
-                            className={`input ${touched.nombre && errors.nombre ? 'input--error' : ''}`}
+                            className={[
+                                'input',
+                                touched.nombre && errors.nombre ? 'input--error' : '',
+                                touched.nombre && !errors.nombre ? 'input--valid' : '',
+                            ].filter(Boolean).join(' ')}
                             placeholder="Ej. Auriculares Bluetooth"
                             maxLength={100}
                             disabled={loading}
@@ -145,6 +181,7 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                         <div className="form-group">
                             <label htmlFor="field-precio" className="form-label">
                                 Precio (USD) <span className="required">*</span>
+                                <FieldStatusIcon name="precio" touched={touched} errors={errors} />
                             </label>
                             <input
                                 type="number"
@@ -153,7 +190,11 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                                 value={form.precio}
                                 onChange={handleChange}
                                 onBlur={handleBlur}
-                                className={`input ${touched.precio && errors.precio ? 'input--error' : ''}`}
+                                className={[
+                                    'input',
+                                    touched.precio && errors.precio ? 'input--error' : '',
+                                    touched.precio && !errors.precio ? 'input--valid' : '',
+                                ].filter(Boolean).join(' ')}
                                 placeholder="0.00"
                                 min="0"
                                 step="0.01"
@@ -165,6 +206,7 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                         <div className="form-group">
                             <label htmlFor="field-stock" className="form-label">
                                 Stock <span className="required">*</span>
+                                <FieldStatusIcon name="stock" touched={touched} errors={errors} />
                             </label>
                             <input
                                 type="number"
@@ -173,7 +215,11 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                                 value={form.stock}
                                 onChange={handleChange}
                                 onBlur={handleBlur}
-                                className={`input ${touched.stock && errors.stock ? 'input--error' : ''}`}
+                                className={[
+                                    'input',
+                                    touched.stock && errors.stock ? 'input--error' : '',
+                                    touched.stock && !errors.stock ? 'input--valid' : '',
+                                ].filter(Boolean).join(' ')}
                                 placeholder="0"
                                 min="0"
                                 step="1"
@@ -217,6 +263,13 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                         </div>
                     </div>
 
+                    {/* Form status hint when all fields are clean */}
+                    {formIsClean && !loading && (
+                        <p className="form-hint form-hint--valid" aria-live="polite">
+                            ✅ Formulario válido — listo para guardar.
+                        </p>
+                    )}
+
                     {/* Actions */}
                     <div className="form-actions">
                         <button
@@ -240,6 +293,13 @@ export default function ProductForm({ product, onSave, onCancel, loading, catego
                             )}
                         </button>
                     </div>
+
+                    {/* Enviando state message */}
+                    {loading && (
+                        <p className="form-sending-msg" aria-live="assertive">
+                            ⏳ Operación en curso, por favor espera…
+                        </p>
+                    )}
                 </form>
             </div>
         </div>

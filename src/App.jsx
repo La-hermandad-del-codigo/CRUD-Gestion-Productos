@@ -2,13 +2,24 @@
  * App.jsx
  * Root component. Owns the view state (list vs. form) and wires
  * useProducts into ProductList and ProductForm.
+ *
+ * New features:
+ *  - <TaskStatusBar /> component for parallel task visualization
+ *  - <ErrorBoundary /> wrapping the main content
+ *  - "Forzar Error" button: forces 100% failure in storageService for 5 seconds
+ *  - Dark/Light mode toggle (dark is the default)
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useProducts } from './hooks/useProducts';
 import ProductList from './components/ProductList';
 import ProductForm from './components/ProductForm';
 import Toast from './components/Toast';
+import TaskStatusBar from './components/TaskStatusBar';
+import ErrorBoundary from './components/ErrorBoundary';
+import { setForceFailure } from './services/storageService';
+
+const FORCE_ERROR_SECONDS = 5;
 
 export default function App() {
   const {
@@ -30,6 +41,62 @@ export default function App() {
   const [view, setView] = useState('list'); // 'list' | 'form'
   const [editingProduct, setEditingProduct] = useState(null);
   const [toast, setToast] = useState(null); // { message, type:'success'|'error'|'warning' }
+
+  // ── Dark / Light mode ──────────────────────────────────────────────────────
+  const [darkMode, setDarkMode] = useState(true);
+
+  useEffect(() => {
+    if (darkMode) {
+      document.body.classList.remove('light-mode');
+    } else {
+      document.body.classList.add('light-mode');
+    }
+  }, [darkMode]);
+
+  // ── Force Error state ──────────────────────────────────────────────────────
+  const [forceErrorActive, setForceErrorActive] = useState(false);
+  const [forceErrorCountdown, setForceErrorCountdown] = useState(0);
+  const forceErrorTimerRef = useRef(null);
+  const forceErrorIntervalRef = useRef(null);
+
+  const activateForceError = useCallback(() => {
+    if (forceErrorActive) return;
+
+    setForceFailure(true);
+    setForceErrorActive(true);
+    setForceErrorCountdown(FORCE_ERROR_SECONDS);
+
+    // Countdown interval
+    forceErrorIntervalRef.current = setInterval(() => {
+      setForceErrorCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(forceErrorIntervalRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Auto-deactivate after N seconds
+    forceErrorTimerRef.current = setTimeout(() => {
+      setForceFailure(false);
+      setForceErrorActive(false);
+      setForceErrorCountdown(0);
+      clearInterval(forceErrorIntervalRef.current);
+      // Trigger a refresh so the user sees recovery
+      refreshProducts();
+      showToast('✅ Modo error desactivado. Operaciones restauradas.', 'success');
+    }, FORCE_ERROR_SECONDS * 1000);
+  }, [forceErrorActive, refreshProducts]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearTimeout(forceErrorTimerRef.current);
+      clearInterval(forceErrorIntervalRef.current);
+      setForceFailure(false);
+    };
+  }, []);
 
   // ── Toast helper ───────────────────────────────────────────────────────────
   const showToast = (message, type = 'success') => {
@@ -56,11 +123,9 @@ export default function App() {
   const handleSave = async (data) => {
     try {
       if (editingProduct) {
-        // UPDATE with optimistic update (handled inside editProduct)
         await editProduct(editingProduct.id, data);
         showToast(`✅ "${data.nombre}" actualizado correctamente.`);
       } else {
-        // CREATE with parallel execution + rollback (handled inside createProduct)
         await createProduct(data);
         showToast(`✅ "${data.nombre}" agregado correctamente.`);
       }
@@ -92,14 +157,19 @@ export default function App() {
     }
   };
 
-  // ── Relay hook errors to toast (only when no toast is currently showing) ───
+  // ── Relay hook errors to toast ─────────────────────────────────────────────
   if (error && !toast) {
     showToast(error, 'error');
     clearError();
   }
 
+  // ── Optimistic ID: which product is being edited right now ─────────────────
+  // When the form is open with an existing product AND a loading op is in progress,
+  // that product gets the optimistic indicator in the list behind the modal.
+  const optimisticId = (view === 'form' && loading && editingProduct) ? editingProduct.id : null;
+
   return (
-    <div className="app">
+    <div className={`app ${forceErrorActive ? 'app--force-error' : ''}`}>
       {/* Header */}
       <header className="header">
         <div className="header__inner">
@@ -118,6 +188,18 @@ export default function App() {
                 Cargando…
               </span>
             )}
+
+            {/* Dark / Light Mode toggle */}
+            <button
+              id="btn-toggle-theme"
+              className="btn btn--ghost btn--sm"
+              onClick={() => setDarkMode((d) => !d)}
+              aria-label={darkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+              title={darkMode ? 'Modo claro' : 'Modo oscuro'}
+            >
+              {darkMode ? '☀️' : '🌙'}
+            </button>
+
             <button
               id="btn-refresh"
               className="btn btn--ghost btn--sm"
@@ -127,23 +209,38 @@ export default function App() {
             >
               🔄 Refrescar
             </button>
+
+            {/* Force Error button */}
+            <button
+              id="btn-force-error"
+              className={`btn btn--sm ${forceErrorActive ? 'btn--force-error-active' : 'btn--danger'}`}
+              onClick={activateForceError}
+              disabled={forceErrorActive}
+              aria-live="polite"
+              title="Fuerza que storageService falle al 100% durante 5 segundos"
+            >
+              {forceErrorActive
+                ? `🔴 Error activo (${forceErrorCountdown}s)`
+                : '🔴 Forzar Error'}
+            </button>
           </div>
         </div>
       </header>
 
       {/* Parallel task status bar */}
-      <div className="task-status-bar" aria-label="Estado de tareas paralelas">
-        {(['products', 'categories', 'validation']).map((task) => {
-          const labels = { products: 'Productos', categories: 'Categorías', validation: 'Validación' };
-          const icons = { idle: '⏸', loading: '⏳', success: '✅', error: '❌' };
-          const status = taskStatuses[task];
-          return (
-            <span key={task} className={`task-pill task-pill--${status}`}>
-              {icons[status]} {labels[task]}
-            </span>
-          );
-        })}
-      </div>
+      <TaskStatusBar taskStatuses={taskStatuses} />
+
+      {/* Force-error banner */}
+      {forceErrorActive && (
+        <div className="force-error-banner" role="alert" aria-live="assertive">
+          <span className="force-error-banner__icon">🚨</span>
+          <strong>Modo Error Forzado activo</strong> — todas las operaciones fallarán durante{' '}
+          <strong>{forceErrorCountdown}</strong> segundo{forceErrorCountdown !== 1 ? 's' : ''}.
+          <span className="force-error-banner__hint">
+            Intenta Refrescar, Agregar o Editar un producto para verlo en vivo.
+          </span>
+        </div>
+      )}
 
       {/* Validation warnings */}
       {validationErrors.length > 0 && (
@@ -157,30 +254,41 @@ export default function App() {
         </div>
       )}
 
-      {/* Main content */}
+      {/* Main content wrapped in ErrorBoundary */}
       <main className="main">
-        {view === 'list' && (
-          <ProductList
-            products={products}
-            categories={categories}
-            loading={loading}
-            onEdit={openForm}
-            onSoftDelete={handleSoftDelete}
-            onHardDelete={handleHardDelete}
-            onAdd={() => openForm(null)}
-          />
-        )}
+        <ErrorBoundary
+          fallbackTitle="Error al renderizar la lista de productos"
+          onReset={refreshProducts}
+        >
+          {view === 'list' && (
+            <ProductList
+              products={products}
+              categories={categories}
+              loading={loading}
+              onEdit={openForm}
+              onSoftDelete={handleSoftDelete}
+              onHardDelete={handleHardDelete}
+              onAdd={() => openForm(null)}
+              optimisticId={optimisticId}
+            />
+          )}
+        </ErrorBoundary>
       </main>
 
-      {/* Form modal */}
+      {/* Form modal (also wrapped in its own ErrorBoundary) */}
       {view === 'form' && (
-        <ProductForm
-          product={editingProduct}
-          onSave={handleSave}
-          onCancel={closeForm}
-          loading={loading}
-          categories={categories}
-        />
+        <ErrorBoundary
+          fallbackTitle="Error al renderizar el formulario"
+          onReset={closeForm}
+        >
+          <ProductForm
+            product={editingProduct}
+            onSave={handleSave}
+            onCancel={closeForm}
+            loading={loading}
+            categories={categories}
+          />
+        </ErrorBoundary>
       )}
 
       {/* Toast notifications */}

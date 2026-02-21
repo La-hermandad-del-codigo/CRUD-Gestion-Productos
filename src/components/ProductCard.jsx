@@ -7,6 +7,8 @@
  *
  * Hard delete (Eliminar definitivamente): only available when estado === 'inactivo'.
  *   → Physically removes the product after a second confirmation.
+ *
+ * isOptimistic: cuando true, muestra indicador visual de "optimistic update" en progreso.
  */
 
 import StatusBadge from './StatusBadge';
@@ -18,6 +20,7 @@ export default function ProductCard({
     onHardDelete,
     isSoftDeleting,
     isHardDeleting,
+    isOptimistic = false,
 }) {
     const isDeleting = isSoftDeleting || isHardDeleting;
 
@@ -26,8 +29,20 @@ export default function ProductCard({
 
     return (
         <article
-            className={`product-card ${product.estado === 'inactivo' ? 'product-card--inactive' : ''}`}
+            className={[
+                'product-card',
+                product.estado === 'inactivo' ? 'product-card--inactive' : '',
+                isOptimistic ? 'product-card--optimistic' : '',
+            ].filter(Boolean).join(' ')}
         >
+            {/* Optimistic update badge */}
+            {isOptimistic && (
+                <div className="optimistic-badge" aria-live="polite">
+                    <span className="spinner spinner--xs" aria-hidden="true" />
+                    Actualizando…
+                </div>
+            )}
+
             <div className="product-card__header">
                 <span className="product-card__category">{product.categoria}</span>
                 <StatusBadge estado={product.estado} />
@@ -57,7 +72,7 @@ export default function ProductCard({
                 <button
                     className="btn btn--outline"
                     onClick={() => onEdit(product)}
-                    disabled={isDeleting}
+                    disabled={isDeleting || isOptimistic}
                     aria-label={`Editar ${product.nombre}`}
                 >
                     ✏️ Editar
@@ -68,7 +83,7 @@ export default function ProductCard({
                     <button
                         className="btn btn--warning"
                         onClick={() => onSoftDelete(product.id)}
-                        disabled={isDeleting}
+                        disabled={isDeleting || isOptimistic}
                         aria-label={`Desactivar ${product.nombre}`}
                     >
                         {isSoftDeleting ? (
@@ -84,7 +99,7 @@ export default function ProductCard({
                     <button
                         className="btn btn--danger"
                         onClick={() => onHardDelete(product.id, product.nombre)}
-                        disabled={isDeleting}
+                        disabled={isDeleting || isOptimistic}
                         aria-label={`Eliminar definitivamente ${product.nombre}`}
                     >
                         {isHardDeleting ? (

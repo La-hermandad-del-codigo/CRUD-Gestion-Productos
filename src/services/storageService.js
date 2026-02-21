@@ -8,6 +8,19 @@
 const STORAGE_KEY = 'crud_productos';
 const CATEGORIES_KEY = 'crud_categorias';
 
+// ─── Force-failure mode (for demo/testing) ────────────────────────────────────
+
+/** When true, every withSimulation call throws immediately (100% failure). */
+let forceFailure = false;
+
+/**
+ * Activates or deactivates forced-failure mode.
+ * @param {boolean} value
+ */
+export function setForceFailure(value) {
+    forceFailure = Boolean(value);
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Returns a Promise that resolves after a random delay between 200–500ms. */
@@ -22,6 +35,11 @@ function simulateLatency() {
  * @returns {Promise<*>}
  */
 async function withSimulation(operation) {
+    // Forced-failure mode: fail immediately (no latency)
+    if (forceFailure) {
+        throw new Error('🔴 Error forzado activo: todas las operaciones fallan durante el modo de prueba.');
+    }
+
     await simulateLatency();
 
     // ~10% failure probability
