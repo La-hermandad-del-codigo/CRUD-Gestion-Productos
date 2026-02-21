@@ -1,16 +1,33 @@
 /**
  * ProductCard.jsx
- * Displays a single product with edit/delete actions.
+ * Displays a single product with edit, soft-delete, and hard-delete actions.
+ *
+ * Soft delete (Desactivar): only available when estado === 'activo'.
+ *   → Sets estado to 'inactivo' (reversible via edit).
+ *
+ * Hard delete (Eliminar definitivamente): only available when estado === 'inactivo'.
+ *   → Physically removes the product after a second confirmation.
  */
 
 import StatusBadge from './StatusBadge';
 
-export default function ProductCard({ product, onEdit, onDelete, isDeleting }) {
+export default function ProductCard({
+    product,
+    onEdit,
+    onSoftDelete,
+    onHardDelete,
+    isSoftDeleting,
+    isHardDeleting,
+}) {
+    const isDeleting = isSoftDeleting || isHardDeleting;
+
     const formatPrice = (price) =>
         new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'USD' }).format(price);
 
     return (
-        <article className={`product-card ${product.estado === 'inactivo' ? 'product-card--inactive' : ''}`}>
+        <article
+            className={`product-card ${product.estado === 'inactivo' ? 'product-card--inactive' : ''}`}
+        >
             <div className="product-card__header">
                 <span className="product-card__category">{product.categoria}</span>
                 <StatusBadge estado={product.estado} />
@@ -27,13 +44,16 @@ export default function ProductCard({ product, onEdit, onDelete, isDeleting }) {
                 </div>
                 <div className="product-card__detail">
                     <span className="product-card__detail-label">Stock</span>
-                    <span className={`product-card__detail-value ${product.stock === 0 ? 'product-card__stock--empty' : ''}`}>
+                    <span
+                        className={`product-card__detail-value ${product.stock === 0 ? 'product-card__stock--empty' : ''}`}
+                    >
                         {product.stock} uds.
                     </span>
                 </div>
             </div>
 
             <div className="product-card__actions">
+                {/* Edit — always available */}
                 <button
                     className="btn btn--outline"
                     onClick={() => onEdit(product)}
@@ -42,14 +62,38 @@ export default function ProductCard({ product, onEdit, onDelete, isDeleting }) {
                 >
                     ✏️ Editar
                 </button>
-                <button
-                    className="btn btn--danger"
-                    onClick={() => onDelete(product.id)}
-                    disabled={isDeleting}
-                    aria-label={`Eliminar ${product.nombre}`}
-                >
-                    {isDeleting ? '⏳' : '🗑️'} Eliminar
-                </button>
+
+                {/* Soft delete — only when activo */}
+                {product.estado === 'activo' && (
+                    <button
+                        className="btn btn--warning"
+                        onClick={() => onSoftDelete(product.id)}
+                        disabled={isDeleting}
+                        aria-label={`Desactivar ${product.nombre}`}
+                    >
+                        {isSoftDeleting ? (
+                            <><span className="spinner spinner--sm" aria-hidden="true" /> Desactivando…</>
+                        ) : (
+                            '🔕 Desactivar'
+                        )}
+                    </button>
+                )}
+
+                {/* Hard delete — only when inactivo */}
+                {product.estado === 'inactivo' && (
+                    <button
+                        className="btn btn--danger"
+                        onClick={() => onHardDelete(product.id, product.nombre)}
+                        disabled={isDeleting}
+                        aria-label={`Eliminar definitivamente ${product.nombre}`}
+                    >
+                        {isHardDeleting ? (
+                            <><span className="spinner spinner--sm" aria-hidden="true" /> Eliminando…</>
+                        ) : (
+                            '🗑️ Eliminar definitiv.'
+                        )}
+                    </button>
+                )}
             </div>
         </article>
     );

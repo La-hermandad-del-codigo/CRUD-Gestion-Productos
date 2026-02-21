@@ -168,6 +168,61 @@ export async function getCategories() {
 }
 
 /**
+ * Persists an updated category list to localStorage.
+ * Used when adding a product with a new category (and for rollback).
+ * @param {string[]} categories
+ * @returns {Promise<string[]>}
+ */
+export async function saveCategories(categories) {
+    return withSimulation(() => {
+        localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
+        return categories;
+    });
+}
+
+/**
+ * Reads the current category list synchronously from localStorage (never throws).
+ * Useful for rollback without an extra async round-trip.
+ * @returns {string[]}
+ */
+export function readCategoriesSync() {
+    try {
+        const raw = localStorage.getItem(CATEGORIES_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+        return [...DEFAULT_CATEGORIES];
+    } catch {
+        return [...DEFAULT_CATEGORIES];
+    }
+}
+
+/**
+ * Removes a product physically from storage (hard delete).
+ * Should only be called on products that are already 'inactivo'.
+ * @param {string} id
+ * @returns {Promise<string>} Resolves with the deleted product id.
+ */
+export async function hardDeleteProduct(id) {
+    return withSimulation(() => {
+        const products = readFromStorage();
+        const index = products.findIndex((p) => p.id === id);
+
+        if (index === -1) {
+            throw new Error(`Producto con id "${id}" no encontrado.`);
+        }
+        if (products[index].estado !== 'inactivo') {
+            throw new Error(`Solo se pueden eliminar definitivamente productos inactivos.`);
+        }
+
+        const filtered = products.filter((p) => p.id !== id);
+        writeToStorage(filtered);
+        return id;
+    });
+}
+
+/**
  * Validates product data integrity:
  * checks that no product has precio < 0 or stock < 0.
  * @returns {Promise<Array<{ id: string, nombre: string, field: string, value: number }>>}

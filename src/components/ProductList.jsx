@@ -1,40 +1,96 @@
 /**
  * ProductList.jsx
- * Grid view of all products with search, filter, and stats bar.
+ * Grid view of all products with search/filter (client-side) and stats bar.
+ *
+ * Filtering (no new storage calls):
+ *   - By name (text, case-insensitive, also searches description)
+ *   - By category (dynamic list from hook state)
+ *   - By status ('todos' | 'activo' | 'inactivo')
+ *
+ * Delete flow:
+ *   - onSoftDelete: confirm → desactivar (estado='inactivo')
+ *   - onHardDelete: double-confirm → eliminar definitivamente (solo si inactivo)
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import ProductCard from './ProductCard';
 
-const CATEGORIES = ['Todos', 'Electrónica', 'Ropa', 'Alimentos', 'Hogar', 'Deportes', 'Otros'];
-
-export default function ProductList({ products, loading, onEdit, onDelete, onAdd }) {
+export default function ProductList({
+    products,
+    categories,
+    loading,
+    onEdit,
+    onSoftDelete,
+    onHardDelete,
+    onAdd,
+}) {
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('Todos');
     const [statusFilter, setStatusFilter] = useState('todos');
-    const [deletingId, setDeletingId] = useState(null);
 
-    const handleDelete = async (id) => {
-        if (!window.confirm('¿Estás seguro de que deseas eliminar este producto?')) return;
-        setDeletingId(id);
+    // Per-product action loading state (independent)
+    const [softDeletingId, setSoftDeletingId] = useState(null);
+    const [hardDeletingId, setHardDeletingId] = useState(null);
+
+    // ── Search/filter — pure client-side, no I/O ─────────────────────────────────
+    const filtered = useMemo(() => {
+        const term = search.toLowerCase().trim();
+        return products.filter((p) => {
+            const matchSearch =
+                !term ||
+                p.nombre.toLowerCase().includes(term) ||
+                p.categoria.toLowerCase().includes(term);
+            const matchCat = categoryFilter === 'Todos' || p.categoria === categoryFilter;
+            const matchStatus = statusFilter === 'todos' || p.estado === statusFilter;
+            return matchSearch && matchCat && matchStatus;
+        });
+    }, [products, search, categoryFilter, statusFilter]);
+
+    // ── Dynamic category options (from hook state, never stale) ──────────────────
+    const categoryOptions = useMemo(
+        () => ['Todos', ...categories],
+        [categories]
+    );
+
+    // ── Stats ─────────────────────────────────────────────────────────────────────
+    const totalActive = products.filter((p) => p.estado === 'activo').length;
+    const totalInactive = products.filter((p) => p.estado === 'inactivo').length;
+    const totalValue = products.reduce((sum, p) => sum + p.precio * p.stock, 0);
+
+    // ── Soft delete handler ───────────────────────────────────────────────────────
+    const handleSoftDelete = async (id) => {
+        const product = products.find((p) => p.id === id);
+        const name = product?.nombre ?? 'este producto';
+
+        if (!window.confirm(`¿Desactivar "${name}"?\nEl producto quedará inactivo pero no se eliminará.`)) {
+            return;
+        }
+
+        setSoftDeletingId(id);
         try {
-            await onDelete(id);
+            await onSoftDelete(id);
         } finally {
-            setDeletingId(null);
+            setSoftDeletingId(null);
         }
     };
 
-    // Filtering
-    const filtered = products.filter((p) => {
-        const matchSearch = p.nombre.toLowerCase().includes(search.toLowerCase()) ||
-            p.categoria.toLowerCase().includes(search.toLowerCase());
-        const matchCat = categoryFilter === 'Todos' || p.categoria === categoryFilter;
-        const matchStatus = statusFilter === 'todos' || p.estado === statusFilter;
-        return matchSearch && matchCat && matchStatus;
-    });
+    // ── Hard delete handler ───────────────────────────────────────────────────────
+    const handleHardDelete = async (id, nombre) => {
+        const name = nombre ?? 'este producto';
 
-    const totalActive = products.filter((p) => p.estado === 'activo').length;
-    const totalValue = products.reduce((sum, p) => sum + p.precio * p.stock, 0);
+        if (!window.confirm(
+            `⚠️ ELIMINACIÓN DEFINITIVA\n\n¿Eliminar permanentemente "${name}"?\n\nEsta acción NO se puede deshacer.`
+        )) {
+            return;
+        }
+
+        setHardDeletingId(id);
+        try {
+            await onHardDelete(id);
+        } finally {
+            setHardDeletingId(null);
+        }
+    };
 
     return (
         <div className="product-list">
@@ -47,6 +103,10 @@ export default function ProductList({ products, loading, onEdit, onDelete, onAdd
                 <div className="stat-card">
                     <span className="stat-card__value">{totalActive}</span>
                     <span className="stat-card__label">Activos</span>
+                </div>
+                <div className="stat-card">
+                    <span className="stat-card__value">{totalInactive}</span>
+                    <span className="stat-card__label">Inactivos</span>
                 </div>
                 <div className="stat-card">
                     <span className="stat-card__value">
@@ -79,7 +139,7 @@ export default function ProductList({ products, loading, onEdit, onDelete, onAdd
                         className="select"
                         aria-label="Filtrar por categoría"
                     >
-                        {CATEGORIES.map((c) => (
+                        {categoryOptions.map((c) => (
                             <option key={c} value={c}>{c}</option>
                         ))}
                     </select>
@@ -138,8 +198,10 @@ export default function ProductList({ products, loading, onEdit, onDelete, onAdd
                             key={product.id}
                             product={product}
                             onEdit={onEdit}
-                            onDelete={handleDelete}
-                            isDeleting={deletingId === product.id}
+                            onSoftDelete={handleSoftDelete}
+                            onHardDelete={handleHardDelete}
+                            isSoftDeleting={softDeletingId === product.id}
+                            isHardDeleting={hardDeletingId === product.id}
                         />
                     ))}
                 </div>

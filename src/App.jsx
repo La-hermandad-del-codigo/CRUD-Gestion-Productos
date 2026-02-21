@@ -22,20 +22,22 @@ export default function App() {
     createProduct,
     editProduct,
     removeProduct,
+    hardDeleteProduct,
     clearError,
   } = useProducts();
 
   // ── View state ─────────────────────────────────────────────────────────────
   const [view, setView] = useState('list'); // 'list' | 'form'
   const [editingProduct, setEditingProduct] = useState(null);
-  const [toast, setToast] = useState(null); // { message, type:'success'|'error' }
+  const [toast, setToast] = useState(null); // { message, type:'success'|'error'|'warning' }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Toast helper ───────────────────────────────────────────────────────────
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 4000);
   };
 
+  // ── Form transitions ───────────────────────────────────────────────────────
   const openForm = (product = null) => {
     setEditingProduct(product);
     setView('form');
@@ -49,32 +51,48 @@ export default function App() {
   };
 
   // ── CRUD handlers ──────────────────────────────────────────────────────────
+
+  /** CREATE / UPDATE — called from ProductForm on submit */
   const handleSave = async (data) => {
     try {
       if (editingProduct) {
+        // UPDATE with optimistic update (handled inside editProduct)
         await editProduct(editingProduct.id, data);
-        showToast(`"${data.nombre}" actualizado correctamente.`);
+        showToast(`✅ "${data.nombre}" actualizado correctamente.`);
       } else {
+        // CREATE with parallel execution + rollback (handled inside createProduct)
         await createProduct(data);
-        showToast(`"${data.nombre}" agregado correctamente.`);
+        showToast(`✅ "${data.nombre}" agregado correctamente.`);
       }
       closeForm();
     } catch {
-      // error already stored in hook's `error` state, shown via Toast below
+      // Error already stored in hook's `error` state → rendered as toast below
     }
   };
 
-  const handleDelete = async (id) => {
+  /** SOFT DELETE — sets estado = 'inactivo', with optimistic update + revert */
+  const handleSoftDelete = async (id) => {
+    const product = products.find((p) => p.id === id);
     try {
-      const product = products.find((p) => p.id === id);
       await removeProduct(id);
-      showToast(`"${product?.nombre ?? 'Producto'}" eliminado.`);
+      showToast(`🔕 "${product?.nombre ?? 'Producto'}" desactivado.`, 'warning');
     } catch {
-      // error shown via error → Toast
+      // Error shown via error → Toast
     }
   };
 
-  // ── Rendered error → show as toast ─────────────────────────────────────────
+  /** HARD DELETE — physically removes an already-inactive product */
+  const handleHardDelete = async (id) => {
+    const product = products.find((p) => p.id === id);
+    try {
+      await hardDeleteProduct(id);
+      showToast(`🗑️ "${product?.nombre ?? 'Producto'}" eliminado definitivamente.`, 'error');
+    } catch {
+      // Error shown via error → Toast
+    }
+  };
+
+  // ── Relay hook errors to toast (only when no toast is currently showing) ───
   if (error && !toast) {
     showToast(error, 'error');
     clearError();
@@ -144,9 +162,11 @@ export default function App() {
         {view === 'list' && (
           <ProductList
             products={products}
+            categories={categories}
             loading={loading}
             onEdit={openForm}
-            onDelete={handleDelete}
+            onSoftDelete={handleSoftDelete}
+            onHardDelete={handleHardDelete}
             onAdd={() => openForm(null)}
           />
         )}
